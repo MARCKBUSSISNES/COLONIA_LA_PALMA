@@ -2,7 +2,7 @@
 var PRICE = 3;
 
 // acceso interno
-var EDIT_CODE = "363534";
+var EDIT_CODE = "12345";
 
 // activación (cámbialo en GitHub cuando quieras)
 var ACTIVATION_CODE = "2278";
@@ -338,6 +338,12 @@ window.saveClient = async function(){
   var id = "C|" + casa.toUpperCase() + "|" + meter;
   var existing = await idbGet("clients", id);
 
+  // Si el cliente ya existe, esto es una EDICIÓN: pedir clave 12345
+  if(existing){
+    var cedit = prompt("Clave para editar cliente:");
+    if(cedit !== EDIT_CODE){ alert("Acceso denegado"); return; }
+  }
+
   var client = {
     id:id, casa:casa, meter:meter, name:name,
     balance: existing ? Number(existing.balance||0) : 0,
@@ -370,10 +376,24 @@ async function renderClients(){
     var c = list[i];
     html += "<div style='padding:10px;border-radius:14px;background:#0b1133;margin:8px 0'>";
     html += "<b>"+escapeHtml(c.casa)+" · "+escapeHtml(c.name)+"</b><br>";
-    html += "<span style='color:#9ca3af;font-size:12px'>Contador: "+escapeHtml(c.meter)+" · Saldo: <b>"+money(c.balance)+"</b></span>";
+    html += "<span style='color:#9ca3af;font-size:12px'>Contador: "+escapeHtml(c.meter)+" · Saldo: <b>"+money(c.balance)+"</b></span>";html += "<div style='margin-top:8px;display:flex;gap:8px;flex-wrap:wrap'>";html += "<button style='padding:10px 12px;border-radius:999px;border:none;background:linear-gradient(135deg,#2563eb,#3b82f6);color:white;font-weight:900' onclick=\"editClientById(\'"+c.id+"\')\">Editar</button>";html += "</div>";
     html += "</div>";
   }
-  box.innerHTML = html;
+  
+box.innerHTML = html;
+}
+
+// Cargar cliente al formulario para editar (pide 12345)
+window.editClientById = async function(id){
+  if(!isActivated()){ showActivation(); return; }
+  var ccode = prompt("Clave para editar cliente:");
+  if(ccode !== EDIT_CODE){ alert("Acceso denegado"); return; }
+  var c = await idbGet("clients", id);
+  if(!c){ alert("Cliente no encontrado"); return; }
+  if($("cCasa")) $("cCasa").value = c.casa || "";
+  if($("cContador")) $("cContador").value = c.meter || "";
+  if($("cNombre")) $("cNombre").value = c.name || "";
+  alert("Cliente cargado. Al guardar, se pedirá clave para editar.");
 }
 
 // ===== Selectores =====
@@ -554,7 +574,7 @@ window.printLastReading = async function(){
     "<div class='row'><span><b>TOTAL</b></span><span><b>Q" + Number(last.total).toFixed(2) + "</b></span></div>" +
 
     "<div class='sep'></div>" +
-    "<div><b>Pago:</b> BANRURAL - Ahorro</div>" +
+    "<div><b>Pago:</b> Banco Industrial - Ahorro</div>" +
     "<div><b>Cuenta:</b> 4503027719</div>" +
 
     "<div class='sep'></div>" +
@@ -671,13 +691,64 @@ window.unlockLastPrinted = async function(){
 
   var last = await getLastReading(clientId);
   if(!last){ alert("No disponible"); return; }
-  if(!last.locked){ alert("No disponible"); return; }
 
-  var c = prompt("");
-  if(c !== EDIT_CODE){ alert("Acceso denegado"); return; }
+  // Pedir clave 12345 para cualquier edición/desbloqueo
+  var ccode = prompt("Clave 12345:");
+  if(ccode !== EDIT_CODE){ alert("Acceso denegado"); return; }
 
-  last.locked = false;
+  // Si está bloqueada, siempre desbloqueamos impresión
+  if(last.locked){
+    last.locked = false;
+  }
+
+  // Preguntar si también desea EDITAR la última lectura
+  var doEdit = confirm("¿Deseas EDITAR la última lectura? (OK=Sí / Cancel=Solo desbloquear)");
+  if(doEdit){
+    var client = await idbGet("clients", clientId);
+    if(!client){ alert("Cliente no encontrado"); return; }
+
+    // Permitir cambiar lectura actual (curr)
+    var newCurrStr = prompt("Nueva lectura actual (número):", String(last.curr));
+    if(newCurrStr === null) { /* cancel */ }
+    else{
+      var newCurr = Number(newCurrStr);
+      if(!Number.isFinite(newCurr)){ alert("Lectura inválida"); return; }
+      if(newCurr < Number(last.prev||0)){ alert("La lectura no puede ser menor que la anterior"); return; }
+
+      var oldTotal = Number(last.total||0);
+      var oldCurr = Number(last.curr||0);
+
+      var newConsumo = newCurr - Number(last.prev||0);
+      var newTotal = newConsumo * Number(last.price||PRICE);
+
+      // Actualizar lectura
+      last.curr = newCurr;
+      last.consumo = newConsumo;
+      last.total = newTotal;
+      last.ts = Date.now(); // marcar edición
+
+      // Ajustar saldo del cliente por la diferencia
+      var diff = newTotal - oldTotal;
+      client.balance = Number(client.balance||0) + diff;
+
+      // Ajustar lastReadingValue SOLO si esta lectura era la última aplicada
+      // (en este sistema, editamos siempre la última lectura del cliente)
+      client.lastReadingValue = newCurr;
+      client.updatedAt = Date.now();
+
+      await idbPut("clients", client);
+      if($("prev")) $("prev").value = (client.lastReadingValue!=null ? client.lastReadingValue : 0);
+      if($("act")) $("act").value = "";
+      if($("consumoTxt")) $("consumoTxt").textContent = "-";
+      if($("totalTxt")) $("totalTxt").textContent = "-";
+
+      alert("Lectura editada y saldo recalculado.");
+    }
+  }
+
   await idbPut("readings", last);
+  await updatePending();
+  try{ await renderDash(); }catch(e){}
   alert("Listo");
 };
 
