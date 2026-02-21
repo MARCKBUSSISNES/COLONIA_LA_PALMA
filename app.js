@@ -327,6 +327,38 @@ function idbByIndex(store, idxName, value){
   });
 }
 
+// ✅ NUEVO: delete por key
+function idbDel(store, key){
+  return new Promise(function(resolve,reject){
+    var r = tx(store,"readwrite").delete(key);
+    r.onsuccess=function(){ resolve(true); };
+    r.onerror=function(){ reject(r.error); };
+  });
+}
+
+// ✅ NUEVO: borrar por índice (clientId) en readings/payments
+function idbDeleteByIndex(store, idxName, value){
+  return new Promise(function(resolve,reject){
+    var s = tx(store, "readwrite");
+    var idx = s.index(idxName);
+    var range = IDBKeyRange.only(value);
+    var count = 0;
+
+    var req = idx.openCursor(range);
+    req.onsuccess = function(){
+      var cursor = req.result;
+      if(cursor){
+        cursor.delete();
+        count++;
+        cursor.continue();
+      } else {
+        resolve(count);
+      }
+    };
+    req.onerror = function(){ reject(req.error); };
+  });
+}
+
 // ===== Clientes =====
 window.saveClient = async function(){
   if(!isActivated()){ showActivation(); return; }
@@ -376,11 +408,18 @@ async function renderClients(){
     var c = list[i];
     html += "<div style='padding:10px;border-radius:14px;background:#0b1133;margin:8px 0'>";
     html += "<b>"+escapeHtml(c.casa)+" · "+escapeHtml(c.name)+"</b><br>";
-    html += "<span style='color:#9ca3af;font-size:12px'>Contador: "+escapeHtml(c.meter)+" · Saldo: <b>"+money(c.balance)+"</b></span>";html += "<div style='margin-top:8px;display:flex;gap:8px;flex-wrap:wrap'>";html += "<button style='padding:10px 12px;border-radius:999px;border:none;background:linear-gradient(135deg,#2563eb,#3b82f6);color:white;font-weight:900' onclick=\"editClientById(\'"+c.id+"\')\">Editar</button>";html += "</div>";
+    html += "<span style='color:#9ca3af;font-size:12px'>Contador: "+escapeHtml(c.meter)+" · Saldo: <b>"+money(c.balance)+"</b></span>";
+
+    html += "<div style='margin-top:8px;display:flex;gap:8px;flex-wrap:wrap'>";
+    html += "<button style='padding:10px 12px;border-radius:999px;border:none;background:linear-gradient(135deg,#2563eb,#3b82f6);color:white;font-weight:900' onclick=\"editClientById(\'"+c.id+"\')\">Editar</button>";
+    // ✅ NUEVO: Eliminar
+    html += "<button style='padding:10px 12px;border-radius:999px;border:none;background:linear-gradient(135deg,#dc2626,#ef4444);color:white;font-weight:900' onclick=\"deleteClientById(\'"+c.id+"\')\">Eliminar</button>";
+    html += "</div>";
+
     html += "</div>";
   }
-  
-box.innerHTML = html;
+
+  box.innerHTML = html;
 }
 
 // Cargar cliente al formulario para editar (pide 12345)
@@ -394,7 +433,48 @@ window.editClientById = async function(id){
   if($("cContador")) $("cContador").value = c.meter || "";
   if($("cNombre")) $("cNombre").value = c.name || "";
   alert("Cliente cargado. Al guardar, se pedirá clave para editar.");
-}
+};
+
+// ✅ NUEVO: Eliminar cliente (con cascada opcional)
+window.deleteClientById = async function(id){
+  if(!isActivated()){ showActivation(); return; }
+
+  var ccode = prompt("Clave para ELIMINAR cliente:");
+  if(ccode !== EDIT_CODE){ alert("Acceso denegado"); return; }
+
+  var c = await idbGet("clients", id);
+  if(!c){ alert("Cliente no encontrado"); return; }
+
+  var msg =
+    "¿Eliminar este cliente?\n\n" +
+    "Casa: " + (c.casa||"") + "\n" +
+    "Contador: " + (c.meter||"") + "\n" +
+    "Nombre: " + (c.name||"") + "\n\n" +
+    "Esta acción NO se puede deshacer.";
+  if(!confirm(msg)) return;
+
+  var cascade = confirm("¿También deseas borrar SUS LECTURAS y PAGOS? (Recomendado)\n\nOK = Sí, borrar todo\nCancelar = Solo borrar cliente");
+
+  if(cascade){
+    try{ await idbDeleteByIndex("readings", "byClient", id); }catch(e){}
+    try{ await idbDeleteByIndex("payments", "byClient", id); }catch(e){}
+  }
+
+  await idbDel("clients", id);
+
+  // refrescar
+  try{ await refreshSelectors(); }catch(e){}
+  try{ await renderClients(); }catch(e){}
+  try{ await renderDash(); }catch(e){}
+
+  // si estaba viendo historial de ese cliente
+  try{
+    var sh = $("selHistClient") ? $("selHistClient").value : "";
+    if(sh === id && $("historyBox")) $("historyBox").innerHTML = "—";
+  }catch(e){}
+
+  alert("Cliente eliminado ✅");
+};
 
 // ===== Selectores =====
 async function refreshSelectors(){
@@ -716,7 +796,6 @@ window.unlockLastPrinted = async function(){
       if(newCurr < Number(last.prev||0)){ alert("La lectura no puede ser menor que la anterior"); return; }
 
       var oldTotal = Number(last.total||0);
-      var oldCurr = Number(last.curr||0);
 
       var newConsumo = newCurr - Number(last.prev||0);
       var newTotal = newConsumo * Number(last.price||PRICE);
@@ -731,8 +810,7 @@ window.unlockLastPrinted = async function(){
       var diff = newTotal - oldTotal;
       client.balance = Number(client.balance||0) + diff;
 
-      // Ajustar lastReadingValue SOLO si esta lectura era la última aplicada
-      // (en este sistema, editamos siempre la última lectura del cliente)
+      // Ajustar lastReadingValue (editamos la última lectura)
       client.lastReadingValue = newCurr;
       client.updatedAt = Date.now();
 
@@ -902,7 +980,6 @@ window.onerror = function(msg, src, line, col){
   }catch(e){}
 };
 
-
 document.addEventListener("DOMContentLoaded", function(){
   // coloca ID
   try{ if($("deviceIdTxt")) $("deviceIdTxt").textContent = getDeviceId(); }catch(e){}
@@ -927,7 +1004,6 @@ document.addEventListener("DOMContentLoaded", function(){
     var imgs = document.querySelectorAll('img');
     for(var i=0;i<imgs.length;i++){
       imgs[i].addEventListener('error', function(){
-        // no alert; solo consola
         try{ console.warn("No se encontró imagen:", this.getAttribute("src")); }catch(e){}
       });
     }
