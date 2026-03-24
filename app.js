@@ -654,7 +654,7 @@ window.printLastReading = async function(){
     "<div class='row'><span><b>TOTAL</b></span><span><b>Q" + Number(last.total).toFixed(2) + "</b></span></div>" +
 
     "<div class='sep'></div>" +
-    "<div><b>Pago:</b> Banco Industrial - Ahorro</div>" +
+    "<div><b>Pago:</b> BANRURAL - Ahorro</div>" +
     "<div><b>Cuenta:</b> 4503027719</div>" +
 
     "<div class='sep'></div>" +
